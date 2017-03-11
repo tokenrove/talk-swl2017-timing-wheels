@@ -1,0 +1,97 @@
+
+* Implementations of Timing Wheels (1 minute)
+
+Julian Squires <julian.squires@adgear.com>
+
+Today I'm going to talk about performance without any benchmarks or
+evidence, which is as pure a form of lying as any, so I hope you'll
+forgive me and take everything with a grain of salt.
+
+* {Why,What,How} are timing wheels?
+
+- Varghese and Lauck
+
+* Why? (2 minutes)
+
+- having cheaply-cancellable timers changes what you can do
+- lots of distributed systems algorithms
+
+- basic example we'll run with: best-effort UDP application that needs
+  timeouts; these timers are almost always cancelled
+
+- flow-control produces timers that almost always expire
+
+
+** Other reasons it's interesting to know about this stuff
+
+We'll see there are tradeoffs here that affect what you, a user of
+such a facility, can do.  You should know how your system implements
+timers (possibly several kinds), and what might introduce performance
+problems, or confound measurement in benchmarks.  If you use timing in
+a way that relates to money (billing by time spent, for example), can
+an adversary use deficiencies in your timing facility's implementation
+to affect your bottom line?
+
+* What? (5 minutes)
+
+** Interface
+
+start-timer
+stop-timer
+per-tick-bookkeeping
+expiry-processing
+
+Varghese says (in _Network Algorithmics_):
+  Use special techniques for finite universes such as integers
+
+Hashed vs Hierarchical
+Big-O notation vs reality
+How big is the difference between O(lg(N)) and O(1)?
+
+Priority queue
+
+Relationship with radix sort, histogram
+
+Indeed, if we want more dynamic range -- log-linear buckets / HDR
+histogram, this takes us to hierarchical timing wheels.
+
+In Linux's timing wheel, we also get an appearance by another favorite
+practical data structures: bitmaps and compressed bitmaps.
+
+* How? (12 minutes)
+
+** Heaps
+
+Accuracy vs Performance
+
+*** node.js
+*** Illumos
+*** Softheaps?
+** Hashed Timing Wheels
+*** FreeBSD
+
+https://github.com/freebsd/freebsd/blob/master/sys/kern/kern_timeout.c
+
+ - still based on Varghese's code, if comments are to be trusted
+
+https://github.com/DragonFlyBSD/DragonFlyBSD/blob/master/sys/kern/kern_timeout.c
+ - Dragonfly has the same thing, but with different per-CPU code
+
+** Hierarchical Timing Wheels
+*** Erlang
+*** Linux
+*** Kafka
+*** Ratas
+** Other approaches
+*** DPDK
+*** Zephyr
+
+* Fin
+
+I recently talked about this topic for an hour and twenty minutes, and
+today's limit is but twenty minutes, so there is much I was forced to
+omit.  I hope this whets your appetite for this lovely family of data
+structures and feel free to talk to me afterwards for more.
+
+I want to thank my employer, AdGear Technologies, for sending me here,
+and all of you for listening.  Thank you.
