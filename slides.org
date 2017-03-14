@@ -1,17 +1,42 @@
+#+REVEAL_ROOT: http://cdn.jsdelivr.net/reveal.js/3.0.0/
 
-* Implementations of Timing Wheels (1 minute)
+* Implementations of Timing Wheels
 
 Julian Squires <julian.squires@adgear.com>
+
+#+BEGIN_NOTES
+(1 minute -- 120 words?)
 
 Today I'm going to talk about performance without any benchmarks or
 evidence, which is as pure a form of lying as any, so I hope you'll
 forgive me and take everything with a grain of salt.
 
+Along the way we encounter many favorite pragmatic data structures:
+ring buffers, histograms, hash tables, bitmaps, and heaps.
+
+The key idea to take away here is that efficient system design always
+involves tradeoffs, which means there will always be room for new
+wheels.  In this case, we'll study a specific case of reinvented
+wheels: timing wheels.
+
+When we speak of reinventing wheels, we're rarely actually talking
+about wheels.
+#+END_NOTES
+
 * {Why,What,How} are timing wheels?
 
-- Varghese and Lauck
+George Varghese, Anthony Lauck: Hashed and Hierarchical Timing Wheels:
+Data Structures for the Efficient Implementation of a Timer
+Facility. SOSP 1987: 25-38
 
-* Why? (2 minutes)
+#+BEGIN_NOTES
+They would have used these techniques on DEC's Gigaswitch.
+#+END_NOTES
+
+* Why?
+
+#+BEGIN_NOTES
+(2 minutes - 250 words?)
 
 - having cheaply-cancellable timers changes what you can do
 - lots of distributed systems algorithms
@@ -21,9 +46,21 @@ forgive me and take everything with a grain of salt.
 
 - flow-control produces timers that almost always expire
 
+- failure recovery, rate-based flow control, scheduling, ...
+
+In a videogame or other simulation, one might want to schedule the
+behavior of many actors based on their next think time, with the
+ability to cancel their next scheduling in reaction to events.
+
+One question that came up when I talked about this before was what
+about cron?  Although I certainly hope your cron daemon isn't handling
+millions of scheduled events, it turns out the traditional approach
+there is an event list due to Franta and Maly.
+#+END_NOTES
 
 ** Other reasons it's interesting to know about this stuff
 
+#+BEGIN_NOTES
 We'll see there are tradeoffs here that affect what you, a user of
 such a facility, can do.  You should know how your system implements
 timers (possibly several kinds), and what might introduce performance
@@ -31,15 +68,45 @@ problems, or confound measurement in benchmarks.  If you use timing in
 a way that relates to money (billing by time spent, for example), can
 an adversary use deficiencies in your timing facility's implementation
 to affect your bottom line?
+#+END_NOTES
 
 * What? (5 minutes)
 
 ** Interface
 
-start-timer
-stop-timer
-per-tick-bookkeeping
-expiry-processing
+#+BEGIN_EXAMPLE
+user:
+  start-timer
+  stop-timer
+interrupt:
+  per-tick-bookkeeping
+  expiry-processing
+#+END_EXAMPLE
+
+#+BEGIN_EXAMPLE
+schedule(duration, action) -> timer
+advance(duration)
+timer.cancel()
+timer.active?() -> bool
+#+END_EXAMPLE
+
+#+BEGIN_NOTES
+Varghese proposes the following interface for a timer system, where we
+can start and stop timers, supplying a request ID to identify them,
+and where the timer interrupt calls per-tick-bookkeeping, which ends
+up calling expiry-processing if necessary.
+
+This doesn't quite map to the implementations we'll study here, and
+I'll use something closer to Juho Snellman's Ratas, which uses
+schedule, cancel, and advance.  We'll assume that you have a
+programmable timer interrupt of some sort that can call advance when
+you need it.
+#+END_NOTES
+
+#+BEGIN_NOTES
+Whenever we want sorting, one of the structures we're going to
+immediately think of is a heap.
+#+END_NOTES
 
 Varghese says (in _Network Algorithmics_):
   Use special techniques for finite universes such as integers
@@ -47,6 +114,25 @@ Varghese says (in _Network Algorithmics_):
 Hashed vs Hierarchical
 Big-O notation vs reality
 How big is the difference between O(lg(N)) and O(1)?
+
+When we think about the binary logarithm of N, it's pretty small, and
+the constant factors are more likely to make a difference than these
+asymptotic factors.
+
+[[http://t-t-travails.blogspot.ca/2008/07/overzealous-use-of-my-red-black-tree.html][Jason Evans says:]]
+
+#+BEGIN_QUOTE
+In essence, my initial failure was to disregard the difference between
+a O(1) algorithm and a O(lg n) algorithm. Intuitively, I think of
+logarithmic-time algorithms as fast, but constant factors and large n
+can conspire to make logarthmic time not nearly good enough.
+#+END_QUOTE
+
+I think he's right, but of course the flip side of this is that a
+well-implemented logarithmic-time algorithm might be competitive with
+a constant-time algorithm.  I became more convinced of this after
+looking at the Solaris cyclic subsystem implementation, which is
+heap-based, but features some pretty careful cache and per-CPU tuning.
 
 Priority queue
 
@@ -58,17 +144,38 @@ histogram, this takes us to hierarchical timing wheels.
 In Linux's timing wheel, we also get an appearance by another favorite
 practical data structures: bitmaps and compressed bitmaps.
 
+#+BEGIN_NOTES
+Related, there's been a lot of activity in discrete event simulation
+around priority queues usually called calendar queues.
+#+END_NOTES
+
 * How? (12 minutes)
+
+** Calendar Queues
+
+#+BEGIN_NOTES
+http://stackoverflow.com/questions/6004978/what-is-a-calendar-queue
+#+END_NOTES
 
 ** Heaps
 
+#+BEGIN_NOTES
+When I started looking at this, I was convinced that a
+straight-forward heap solution would not be adequate, and that the
+systems which used a heap did so simply "by default", without much
+thought.
+
+However, after seeing the careful constant-factor tuning of Solaris's
+cyclic subsystem, I am willing to be persuaded that a heap could
+perform adequately for a large number of timers.
+#+END_NOTES
 Accuracy vs Performance
 
 *** node.js
 *** Illumos
 *** Softheaps?
 ** Hashed Timing Wheels
-*** FreeBSD
+*** *BSD
 
 https://github.com/freebsd/freebsd/blob/master/sys/kern/kern_timeout.c
 
@@ -77,17 +184,39 @@ https://github.com/freebsd/freebsd/blob/master/sys/kern/kern_timeout.c
 https://github.com/DragonFlyBSD/DragonFlyBSD/blob/master/sys/kern/kern_timeout.c
  - Dragonfly has the same thing, but with different per-CPU code
 
+#+BEGIN_NOTES
+#+END_NOTES
+
 ** Hierarchical Timing Wheels
+
+#+BEGIN_NOTES
+#+END_NOTES
+
 *** Erlang
 *** Linux
 *** Kafka
 *** Ratas
+
+#+BEGIN_NOTES
+Serendipitously with a reactivated interest I had in timing wheels,
+Adrian Colyer's Morning Paper featured Lauck and Varghese's paper, and
+Juho Snellman posted about Ratas, a timing wheel implementation he had
+designed.
+
+Juho's blog post about the design of Ratas is a great read, and covers
+much of what I've tried to get across in this talk.
+#+END_NOTES
+
 ** Other approaches
 *** DPDK
+
+
+
 *** Zephyr
 
 * Fin
 
+#+BEGIN_NOTES
 I recently talked about this topic for an hour and twenty minutes, and
 today's limit is but twenty minutes, so there is much I was forced to
 omit.  I hope this whets your appetite for this lovely family of data
@@ -95,3 +224,4 @@ structures and feel free to talk to me afterwards for more.
 
 I want to thank my employer, AdGear Technologies, for sending me here,
 and all of you for listening.  Thank you.
+#+END_NOTES

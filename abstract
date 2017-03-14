@@ -1,0 +1,13 @@
+How do you design a facility for managing millions of timers? What if
+you expect almost all those timers to be cancelled before they expire,
+and what kind of real-world system looks like this?
+
+Varghese and Lauck published "Hashed and Hierarchical Timing Wheels"
+in the 80s and it has formed the basis of countless OS timer
+facilities since. I'll discuss this elegantly pragmatic data structure
+and speculate a little on alternatives.
+
+I'll touch on (and show code from) the implementations of timing
+wheels in the Erlang VM, the Linux kernel, Kafka, and Juho Snellman's
+Ratas, as well as non-timing wheel approaches found in DPDK, node.js,
+and perhaps others.
