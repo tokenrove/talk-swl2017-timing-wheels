@@ -1,4 +1,10 @@
 #+REVEAL_ROOT: http://cdn.jsdelivr.net/reveal.js/3.0.0/
+#+REVEAL_THEME: white
+#+OPTIONS: toc:nil
+#+OPTIONS: num:nil
+#+TITLE: Implementations of Timing Wheels
+#+AUTHOR: Julian Squires
+#+EMAIL:
 
 * Implementations of Timing Wheels
 
@@ -36,17 +42,17 @@ don't offend anyone by mischaracterizing an implementation I was too
 dumb to grasp.
 #+END_NOTES
 
-* {Why,What,How} are timing wheels?
+*
 
-Varghese, George, and Tony Lauck. "Hashed and hierarchical timing
+Varghese and Lauck. "Hashed and hierarchical timing
 wheels: Data structures for the efficient implementation of a timer
 facility." ACM SIGOPS Operating Systems Review 21.5 (1987): 25-38.
 
-Varghese, George, and Anthony Lauck. "Hashed and hierarchical timing
+Varghese and Lauck. "Hashed and hierarchical timing
 wheels: efficient data structures for implementing a timer facility."
 IEEE/ACM transactions on networking 5.6 (1997): 824-834.
 
-Varghese, George. Network Algorithmics: An Interdisciplinary Approach
+Varghese. Network Algorithmics: An Interdisciplinary Approach
 To Designing Fast Networked Devices. Morgan Kaufmann, 2004.
 
 #+BEGIN_NOTES
@@ -83,13 +89,13 @@ discussion of his timing wheel implementation, ratas.
 #+END_NOTES
 
 
-* Why?
+* Motivation
 
-Heavy users of timers:
- - rate-based flow-control
- - network timeouts
- - failure recovery, circuit breakers
- - simulations
+| Optimistic      | Pessimistic            |
+|-----------------+------------------------|
+| flow control    | network timeouts       |
+| circuit breaker | TCP congestion control |
+| simulations     | IO timeouts            |
 
 #+BEGIN_NOTES
 (2 minutes - 250 words?)
@@ -119,10 +125,11 @@ calendar queues which we'll talk about later.
 
 #+BEGIN_EXAMPLE
 user:
-  start-timer
-  stop-timer
+  start-timer(interval, request-id, expiry-action)
+  stop-timer(request-id)
 interrupt:
   per-tick-bookkeeping
+internal:
   expiry-processing
 #+END_EXAMPLE
 
@@ -136,13 +143,14 @@ up calling expiry-processing if necessary.
 * Interface
 
 #+BEGIN_EXAMPLE
-schedule(duration, action) -> timer
-schedule(range, action) -> timer
-advance(duration, max_work)
-next_to_wake() -> (duration, timer)
-
-timer.cancel()
-timer.active?() -> bool
+user:
+  schedule(duration, action) -> timer
+  schedule(range, action) -> timer
+  timer.cancel()
+interrupt:
+  advance(duration, max_work)
+internal:
+  till_next_wake() -> duration
 #+END_EXAMPLE
 
 #+BEGIN_NOTES
@@ -153,7 +161,12 @@ programmable timer interrupt of some sort that can call advance when
 you need it.
 #+END_NOTES
 
-* Other reasons it's interesting to know about this stuff
+* Why study timers?
+
+Understand:
+- accuracy of measurement
+- billing / quotas
+- security scenarios
 
 #+BEGIN_NOTES
 We'll see there are tradeoffs here that affect what you, a user of
@@ -167,32 +180,10 @@ to affect your bottom line?
 What if we wanted to make an expiry-oriented database?
 #+END_NOTES
 
-* Considerations for a timer subsystem
-
- - optimistic vs pessimistic
- - accuracy vs performance (slop / slack)
- - ranged scheduling vs exact
- - repeating vs one-shot
- - bounded work per timer interrupt
-   - timer stampede
-
-#+BEGIN_NOTES
- - how sloppy can timer execution be?
- - would the user be happy with providing a range?
- - are some or all timers periodic?
-
- - what about timer stampede?
-   - see optimal probabilistic cache stampede prevention: http://www.vldb.org/pvldb/vol8/p886-vattani.pdf
-   - ratas allows you to specify a maximum number of timers to expire at once
-   - you could also do this when adding the timer instead of when
-     expiring, and this would allow you to have a fixed allocation for
-     timers
-#+END_NOTES
-
 * Guarantees of a timer system
 
-A timer scheduled to fire after *dt* ticks will have its action
-executed, some time after *dt* ticks (if your clock is monotonic and
+A timer scheduled to fire after *t* ticks will have its action
+executed, some time after *t* ticks (if your clock is monotonic and
 doesn't jump forward or skew forward and ...)
 
 #+BEGIN_NOTES
@@ -206,6 +197,29 @@ the other hand, they cause stampedes and inaccurate expiry.
 
 Just look at the problems involved in getting accurate measurements
 from perf, instruction skid, and so on.
+#+END_NOTES
+
+* Considerations for a timer subsystem
+
+ - optimistic versus pessimistic
+ - accuracy versus performance
+ - ranged scheduling versus exact
+ - repeating versus one-shot
+ - throughput versus latency
+   - bounded work per timer interrupt
+   - timer stampede
+
+#+BEGIN_NOTES
+ - how sloppy can timer execution be?
+ - would the user be happy with providing a range?
+ - are some or all timers periodic?
+
+ - what about timer stampede?
+   - see optimal probabilistic cache stampede prevention: http://www.vldb.org/pvldb/vol8/p886-vattani.pdf
+   - ratas allows you to specify a maximum number of timers to expire at once
+   - you could also do this when adding the timer instead of when
+     expiring, and this would allow you to have a fixed allocation for
+     timers
 #+END_NOTES
 
 * How can we implement a timer facility?
@@ -418,18 +432,19 @@ I would be remiss in not mentioning this piece of the timer code in
 macOS.  A nice mix of too-clever and yet highly repetitive.
 #+END_NOTES
 
-* Tree-based priority queues
+* Binary heaps
 
- - binary heaps
- - red-black trees
- - skiplists
- - softheaps?
+ - libev
+ - node.js
+ - Illumos
 
 #+BEGIN_NOTES
 Whenever we want online sorting, one of the ideas we're going to
 immediately think of is a priority queue, and the most obvious way to
 implement it is with a heap.
 #+END_NOTES
+
+* O(lg(N)) versus O(1)
 
 [[http://t-t-travails.blogspot.ca/2008/07/overzealous-use-of-my-red-black-tree.html][Jason Evans says:]]
 
