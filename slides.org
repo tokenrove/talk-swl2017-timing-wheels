@@ -755,7 +755,7 @@ terms of cache use and prefetching.
 
  - calendar queues (cron)
  - skip lists (DPDK)
- - red-black trees (Erlang again)
+ - red-black trees (Linux hrtimers, Erlang BIF timers)
  - softheaps?
 
 #+BEGIN_NOTES
