@@ -444,6 +444,325 @@ immediately think of is a priority queue, and the most obvious way to
 implement it is with a heap.
 #+END_NOTES
 
+* Infinite "Timing Plane"
+
+illustration here of timing plane
+
+#+BEGIN_NOTES
+Varghese says (in _Network Algorithmics_):
+  Use special techniques for finite universes such as integers
+
+A key insight here is that we don't need the timers to be sorted,
+except as they expire.  So that gives us a degree of freedom that
+could beat a heap that tries to maintain sorted order on every
+operation.
+
+Relationship with radix sort, histogram
+#+END_NOTES
+
+* Ring Buffer
+
+The fundamental abstraction of memory: after all, memory itself is a
+ring buffer.
+
+* Hashed Timing Wheels
+
+#+BEGIN_NOTES
+#+END_NOTES
+
+* *BSD
+
+https://github.com/freebsd/freebsd/blob/master/sys/kern/kern_timeout.c
+
+ - still based on Varghese's code, if comments are to be trusted
+
+https://github.com/DragonFlyBSD/DragonFlyBSD/blob/master/sys/kern/kern_timeout.c
+ - Dragonfly has the same thing, but with different per-CPU code
+
+#+BEGIN_NOTES
+#+END_NOTES
+
+* Netty, Agrona
+
+https://github.com/netty/netty/blob/4.1/common/src/main/java/io/netty/util/HashedWheelTimer.java
+https://github.com/real-logic/Agrona/blob/master/agrona/src/main/java/org/agrona/TimerWheel.java
+
+* Erlang
+
+~erts/emulator/beam/erl_hl_timer.c~
+
+Hashed wheels only for proc and port timers, not BIF timers.
+
+#+BEGIN_SRC c
+struct ErtsHLTimer_ {
+    ErtsTmrHead head; /* NEED to be first! */
+    union {
+        ErtsThrPrgrLaterOp cleanup;
+        ErtsHLTimerTimeTree tree;
+    } time;
+    ErtsMonotonicTime timeout;
+    union {
+        Process *proc;
+        Port *port;
+        Eterm name;
+        void (*callback)(void *);
+    } receiver;
+
+#ifdef ERTS_HLT_HARD_DEBUG
+    int pending_timeout;
+#endif
+
+    erts_smp_atomic32_t state;
+
+    /* BIF timer only fields follow... */
+    struct {
+        Uint32 refn[ERTS_REF_NUMBERS];
+        ErtsHLTimerTree proc_tree;
+        ErtsHLTimerTree tree;
+        Eterm message;
+        ErlHeapFragment *bp;
+    } btm;
+#ifdef ERTS_BTM_ACCESSOR_SUPPORT
+    struct {
+        Eterm accessor;
+        ErtsHLTimerTree tree;
+    } abtm;
+#endif
+};
+#+END_SRC
+
+#+BEGIN_SRC c
+typedef struct {
+    UWord parent; /* parent pointer and flags... */
+    union {
+        struct {
+            ErtsHLTimer *right;
+            ErtsHLTimer *left;
+        } t;
+        struct {
+            ErtsHLTimer *prev;
+            ErtsHLTimer *next;
+        } l;
+    } u;
+    ErtsHLTimer *same_time;
+} ErtsHLTimerTimeTree;
+
+typedef struct {
+    UWord parent; /* parent pointer and flags... */
+    ErtsHLTimer *right;
+    ErtsHLTimer *left;
+} ErtsHLTimerTree;
+
+typedef struct {
+    Uint32 roflgs;
+    erts_smp_atomic32_t refc;
+    union {
+        void *arg;
+        erts_atomic_t next;
+    } u;
+} ErtsTmrHead;
+#+END_SRC
+
+~erts/emulator/beam/erl_time.h~
+
+#+BEGIN_SRC c
+typedef struct erl_timer {
+    struct erl_timer* next;     /* next entry tiw slot or chain */
+    struct erl_timer* prev;     /* prev entry tiw slot or chain */
+    union {
+        struct {
+            void (*timeout)(void*); /* called when timeout */
+            void (*cancel)(void*);  /* called when cancel (may be NULL) */
+            void* arg;              /* argument to timeout/cancel procs */
+        } func;
+        ErtsThrPrgrLaterOp cleanup;
+    } u;
+    ErtsMonotonicTime timeout_pos; /* Timeout in absolute clock ticks */
+    int slot;
+} ErtsTWheelTimer;
+#+END_SRC
+
+~erts/emulator/beam/time.c~
+
+#+BEGIN_SRC c
+ * Timeouts kept in an wheel. A timeout is measured relative to the
+ * current slot (tiw_pos) in the wheel, and inserted at slot
+ * (tiw_pos + timeout) % TIW_SIZE. Each timeout also has a count
+ * equal to timeout/TIW_SIZE, which is needed since the time axis
+ * is wrapped arount the wheel.
+#+END_SRC
+
+#+BEGIN_SRC c
+struct ErtsTimerWheel_ {
+    ErtsTWheelTimer *w[ERTS_TIW_SIZE];
+    ErtsMonotonicTime pos;
+    Uint nto;
+    struct {
+        ErtsTWheelTimer *head;
+        ErtsTWheelTimer *tail;
+        Uint nto;
+    } at_once;
+    int yield_slot;
+    int yield_slots_left;
+    int yield_start_pos;
+    ErtsTWheelTimer sentinel;
+    int true_next_timeout_time;
+    ErtsMonotonicTime next_timeout_time;
+};
+#+END_SRC
+
+#+BEGIN_SRC c
+    /* Search at most two seconds ahead... */
+    (void) find_next_timeout(NULL, tiw, 0, curr_time, ERTS_SEC_TO_MONOTONIC(2));
+#+END_SRC
+
+#+BEGIN_SRC c
+static ERTS_INLINE ErtsMonotonicTime
+find_next_timeout(ErtsSchedulerData *esdp,
+                  ErtsTimerWheel *tiw,
+                  int search_all,
+                  ErtsMonotonicTime curr_time,       /* When !search_all */
+                  ErtsMonotonicTime max_search_time) /* When !search_all */
+{
+    int start_ix, tiw_pos_ix;
+    ErtsTWheelTimer *p;
+    int true_min_timeout = 0;
+    ErtsMonotonicTime min_timeout, min_timeout_pos, slot_timeout_pos;
+
+    if (tiw->nto == 0) { /* no timeouts in wheel */
+        if (!search_all)
+            min_timeout_pos = tiw->pos;
+        else {
+            curr_time = erts_get_monotonic_time(esdp);
+            tiw->pos = min_timeout_pos = ERTS_MONOTONIC_TO_CLKTCKS(curr_time);
+        }
+        min_timeout_pos += ERTS_MONOTONIC_TO_CLKTCKS(ERTS_MONOTONIC_DAY);
+        goto found_next;
+    }
+
+    slot_timeout_pos = min_timeout_pos = tiw->pos;
+    if (search_all)
+        min_timeout_pos += ERTS_MONOTONIC_TO_CLKTCKS(ERTS_MONOTONIC_DAY);
+    else
+        min_timeout_pos = ERTS_MONOTONIC_TO_CLKTCKS(curr_time + max_search_time);
+
+    start_ix = tiw_pos_ix = (int) (tiw->pos & (ERTS_TIW_SIZE-1));
+
+    do {
+        if (++slot_timeout_pos >= min_timeout_pos)
+            break;
+
+        p = tiw->w[tiw_pos_ix];
+
+        if (p) {
+            ErtsTWheelTimer *end = p;
+
+            do  {
+                ErtsMonotonicTime timeout_pos;
+                timeout_pos = p->timeout_pos;
+                if (min_timeout_pos > timeout_pos) {
+                    true_min_timeout = 1;
+                    min_timeout_pos = timeout_pos;
+                    if (min_timeout_pos <= slot_timeout_pos)
+                        goto found_next;
+                }
+                p = p->next;
+            } while (p != end);
+        }
+
+        tiw_pos_ix++;
+        if (tiw_pos_ix == ERTS_TIW_SIZE)
+            tiw_pos_ix = 0;
+    } while (start_ix != tiw_pos_ix);
+
+found_next:
+
+    min_timeout = ERTS_CLKTCKS_TO_MONOTONIC(min_timeout_pos);
+    tiw->next_timeout_time = min_timeout;
+    tiw->true_next_timeout_time = true_min_timeout;
+
+    return min_timeout;
+}
+#+END_SRC
+
+* Hierarchical Timing Wheels
+
+illustration here
+
+#+BEGIN_NOTES
+Indeed, if we want more dynamic range -- log-linear buckets / HDR
+histogram, this takes us to hierarchical timing wheels.
+
+In Linux's timing wheel, we also get an appearance by another favorite
+practical data structures: bitmaps and compressed bitmaps.
+
+You might notice that the wheels here are split by 6 bits instead
+of 8.  Why?  2^6 is 64, so we can represent the occupancy of a wheel
+with a 64-bit bitmap.
+#+END_NOTES
+
+
+* Linux
+
+- hrtimers (accurate, run-to-completion) and timeouts (sloppy, usually cancelled)
+
+prctl for thread-wide slack
+
+new one went in in 4.8
+https://lwn.net/Articles/646950/
+https://lwn.net/Articles/152436/
+
+http://elinux.org/Kernel_Timer_Systems
+
+
+~linux/kernel/time/timer.c~
+
+
+* Kafka
+
+http://www.confluent.io/blog/apache-kafka-purgatory-hierarchical-timing-wheels
+
+- formerly used ~java.util.concurrent.DelayQueue~, which is built on a
+  binary heap
+
+* timeout.c
+
+http://25thandclement.com/~william/projects/timeout.c.html
+
+* Ratas
+
+#+BEGIN_NOTES
+Serendipitously with a reactivated interest I had in timing wheels,
+Adrian Colyer's Morning Paper featured Lauck and Varghese's paper, and
+Juho Snellman posted about Ratas, a timing wheel implementation he had
+designed.
+
+Juho's blog post about the design of Ratas is a great read, and covers
+much of what I've tried to get across in this talk.
+
+Snellman makes the argument that we don't need to care about tricks
+like bitmaps for finding the next timer, because this will only occur
+when the wheel has low occupancy, which he conjectures will be when
+the system is under low load and can deal with the extra work of
+scanning for the next tick.
+
+I'm not sure if he's right, but it's a compelling idea, especially
+since a linear scan of a small array is pretty much the best case in
+terms of cache use and prefetching.
+#+END_NOTES
+
+* Other techniques
+
+ - calendar queues (cron)
+ - skip lists (DPDK)
+ - red-black trees (Erlang again)
+ - softheaps?
+
+#+BEGIN_NOTES
+Related, there's been a lot of activity in discrete event simulation
+around priority queues usually called calendar queues.
+#+END_NOTES
+
 * O(lg(N)) versus O(1)
 
 [[http://t-t-travails.blogspot.ca/2008/07/overzealous-use-of-my-red-black-tree.html][Jason Evans says:]]
@@ -560,32 +879,32 @@ static uint32_t
 timer_get_skiplist_level(unsigned curr_depth)
 {
 #ifdef RTE_LIBRTE_TIMER_DEBUG
-	static uint32_t i, count = 0;
-	static uint32_t levels[MAX_SKIPLIST_DEPTH] = {0};
+        static uint32_t i, count = 0;
+        static uint32_t levels[MAX_SKIPLIST_DEPTH] = {0};
 #endif
 
-	/* probability value is 1/4, i.e. all at level 0, 1 in 4 is at level 1,
-	 * 1 in 16 at level 2, 1 in 64 at level 3, etc. Calculated using lowest
-	 * bit position of a (pseudo)random number.
-	 */
-	uint32_t rand = rte_rand() & (UINT32_MAX - 1);
-	uint32_t level = rand == 0 ? MAX_SKIPLIST_DEPTH : (rte_bsf32(rand)-1) / 2;
+        /* probability value is 1/4, i.e. all at level 0, 1 in 4 is at level 1,
+         * 1 in 16 at level 2, 1 in 64 at level 3, etc. Calculated using lowest
+         * bit position of a (pseudo)random number.
+         */
+        uint32_t rand = rte_rand() & (UINT32_MAX - 1);
+        uint32_t level = rand == 0 ? MAX_SKIPLIST_DEPTH : (rte_bsf32(rand)-1) / 2;
 
-	/* limit the levels used to one above our current level, so we don't,
-	 * for instance, have a level 0 and a level 7 without anything between
-	 */
-	if (level > curr_depth)
-		level = curr_depth;
-	if (level >= MAX_SKIPLIST_DEPTH)
-		level = MAX_SKIPLIST_DEPTH-1;
+        /* limit the levels used to one above our current level, so we don't,
+         * for instance, have a level 0 and a level 7 without anything between
+         */
+        if (level > curr_depth)
+                level = curr_depth;
+        if (level >= MAX_SKIPLIST_DEPTH)
+                level = MAX_SKIPLIST_DEPTH-1;
 #ifdef RTE_LIBRTE_TIMER_DEBUG
-	count ++;
-	levels[level]++;
-	if (count % 10000 == 0)
-		for (i = 0; i < MAX_SKIPLIST_DEPTH; i++)
-			printf("Level %u: %u\n", (unsigned)i, (unsigned)levels[i]);
+        count ++;
+        levels[level]++;
+        if (count % 10000 == 0)
+                for (i = 0; i < MAX_SKIPLIST_DEPTH; i++)
+                        printf("Level %u: %u\n", (unsigned)i, (unsigned)levels[i]);
 #endif
-	return level;
+        return level;
 }
 #+END_SRC
 
@@ -607,42 +926,42 @@ an adequate PRNG.
 static void
 timer_add(struct rte_timer *tim, unsigned tim_lcore, int local_is_locked)
 {
-	unsigned lcore_id = rte_lcore_id();
-	unsigned lvl;
-	struct rte_timer *prev[MAX_SKIPLIST_DEPTH+1];
+        unsigned lcore_id = rte_lcore_id();
+        unsigned lvl;
+        struct rte_timer *prev[MAX_SKIPLIST_DEPTH+1];
 
-	/* if timer needs to be scheduled on another core, we need to
-	 * lock the list; if it is on local core, we need to lock if
-	 * we are not called from rte_timer_manage() */
-	if (tim_lcore != lcore_id || !local_is_locked)
-		rte_spinlock_lock(&priv_timer[tim_lcore].list_lock);
+        /* if timer needs to be scheduled on another core, we need to
+         * lock the list; if it is on local core, we need to lock if
+         * we are not called from rte_timer_manage() */
+        if (tim_lcore != lcore_id || !local_is_locked)
+                rte_spinlock_lock(&priv_timer[tim_lcore].list_lock);
 
-	/* find where exactly this element goes in the list of elements
-	 * for each depth. */
-	timer_get_prev_entries(tim->expire, tim_lcore, prev);
+        /* find where exactly this element goes in the list of elements
+         * for each depth. */
+        timer_get_prev_entries(tim->expire, tim_lcore, prev);
 
-	/* now assign it a new level and add at that level */
-	const unsigned tim_level = timer_get_skiplist_level(
-			priv_timer[tim_lcore].curr_skiplist_depth);
-	if (tim_level == priv_timer[tim_lcore].curr_skiplist_depth)
-		priv_timer[tim_lcore].curr_skiplist_depth++;
+        /* now assign it a new level and add at that level */
+        const unsigned tim_level = timer_get_skiplist_level(
+                        priv_timer[tim_lcore].curr_skiplist_depth);
+        if (tim_level == priv_timer[tim_lcore].curr_skiplist_depth)
+                priv_timer[tim_lcore].curr_skiplist_depth++;
 
-	lvl = tim_level;
-	while (lvl > 0) {
-		tim->sl_next[lvl] = prev[lvl]->sl_next[lvl];
-		prev[lvl]->sl_next[lvl] = tim;
-		lvl--;
-	}
-	tim->sl_next[0] = prev[0]->sl_next[0];
-	prev[0]->sl_next[0] = tim;
+        lvl = tim_level;
+        while (lvl > 0) {
+                tim->sl_next[lvl] = prev[lvl]->sl_next[lvl];
+                prev[lvl]->sl_next[lvl] = tim;
+                lvl--;
+        }
+        tim->sl_next[0] = prev[0]->sl_next[0];
+        prev[0]->sl_next[0] = tim;
 
-	/* save the lowest list entry into the expire field of the dummy hdr
-	 * NOTE: this is not atomic on 32-bit*/
-	priv_timer[tim_lcore].pending_head.expire = priv_timer[tim_lcore].\
-			pending_head.sl_next[0]->expire;
+        /* save the lowest list entry into the expire field of the dummy hdr
+         * NOTE: this is not atomic on 32-bit*/
+        priv_timer[tim_lcore].pending_head.expire = priv_timer[tim_lcore].\
+                        pending_head.sl_next[0]->expire;
 
-	if (tim_lcore != lcore_id || !local_is_locked)
-		rte_spinlock_unlock(&priv_timer[tim_lcore].list_lock);
+        if (tim_lcore != lcore_id || !local_is_locked)
+                rte_spinlock_unlock(&priv_timer[tim_lcore].list_lock);
 }
 #+END_SRC
 
@@ -656,167 +975,44 @@ timer_add(struct rte_timer *tim, unsigned tim_lcore, int local_is_locked)
  */
 static void
 timer_del(struct rte_timer *tim, union rte_timer_status prev_status,
-		int local_is_locked)
+                int local_is_locked)
 {
-	unsigned lcore_id = rte_lcore_id();
-	unsigned prev_owner = prev_status.owner;
-	int i;
-	struct rte_timer *prev[MAX_SKIPLIST_DEPTH+1];
+        unsigned lcore_id = rte_lcore_id();
+        unsigned prev_owner = prev_status.owner;
+        int i;
+        struct rte_timer *prev[MAX_SKIPLIST_DEPTH+1];
 
-	/* if timer needs is pending another core, we need to lock the
-	 * list; if it is on local core, we need to lock if we are not
-	 * called from rte_timer_manage() */
-	if (prev_owner != lcore_id || !local_is_locked)
-		rte_spinlock_lock(&priv_timer[prev_owner].list_lock);
+        /* if timer needs is pending another core, we need to lock the
+         * list; if it is on local core, we need to lock if we are not
+         * called from rte_timer_manage() */
+        if (prev_owner != lcore_id || !local_is_locked)
+                rte_spinlock_lock(&priv_timer[prev_owner].list_lock);
 
-	/* save the lowest list entry into the expire field of the dummy hdr.
-	 * NOTE: this is not atomic on 32-bit */
-	if (tim == priv_timer[prev_owner].pending_head.sl_next[0])
-		priv_timer[prev_owner].pending_head.expire =
-				((tim->sl_next[0] == NULL) ? 0 : tim->sl_next[0]->expire);
+        /* save the lowest list entry into the expire field of the dummy hdr.
+         * NOTE: this is not atomic on 32-bit */
+        if (tim == priv_timer[prev_owner].pending_head.sl_next[0])
+                priv_timer[prev_owner].pending_head.expire =
+                                ((tim->sl_next[0] == NULL) ? 0 : tim->sl_next[0]->expire);
 
-	/* adjust pointers from previous entries to point past this */
-	timer_get_prev_entries_for_node(tim, prev_owner, prev);
-	for (i = priv_timer[prev_owner].curr_skiplist_depth - 1; i >= 0; i--) {
-		if (prev[i]->sl_next[i] == tim)
-			prev[i]->sl_next[i] = tim->sl_next[i];
-	}
+        /* adjust pointers from previous entries to point past this */
+        timer_get_prev_entries_for_node(tim, prev_owner, prev);
+        for (i = priv_timer[prev_owner].curr_skiplist_depth - 1; i >= 0; i--) {
+                if (prev[i]->sl_next[i] == tim)
+                        prev[i]->sl_next[i] = tim->sl_next[i];
+        }
 
-	/* in case we deleted last entry at a level, adjust down max level */
-	for (i = priv_timer[prev_owner].curr_skiplist_depth - 1; i >= 0; i--)
-		if (priv_timer[prev_owner].pending_head.sl_next[i] == NULL)
-			priv_timer[prev_owner].curr_skiplist_depth --;
-		else
-			break;
+        /* in case we deleted last entry at a level, adjust down max level */
+        for (i = priv_timer[prev_owner].curr_skiplist_depth - 1; i >= 0; i--)
+                if (priv_timer[prev_owner].pending_head.sl_next[i] == NULL)
+                        priv_timer[prev_owner].curr_skiplist_depth --;
+                else
+                        break;
 
-	if (prev_owner != lcore_id || !local_is_locked)
-		rte_spinlock_unlock(&priv_timer[prev_owner].list_lock);
+        if (prev_owner != lcore_id || !local_is_locked)
+                rte_spinlock_unlock(&priv_timer[prev_owner].list_lock);
 }
 #+END_SRC
 
-
-* Infinite "Timing Plane"
-
-illustration here of timing plane
-
-#+BEGIN_NOTES
-Varghese says (in _Network Algorithmics_):
-  Use special techniques for finite universes such as integers
-
-A key insight here is that we don't need the timers to be sorted,
-except as they expire.  So that gives us a degree of freedom that
-could beat a heap that tries to maintain sorted order on every
-operation.
-
-Relationship with radix sort, histogram
-#+END_NOTES
-
-* Ring Buffer
-
-The fundamental abstraction of memory: after all, memory itself is a
-ring buffer.
-
-* Hashed Timing Wheels
-
-#+BEGIN_NOTES
-#+END_NOTES
-
-* *BSD
-
-https://github.com/freebsd/freebsd/blob/master/sys/kern/kern_timeout.c
-
- - still based on Varghese's code, if comments are to be trusted
-
-https://github.com/DragonFlyBSD/DragonFlyBSD/blob/master/sys/kern/kern_timeout.c
- - Dragonfly has the same thing, but with different per-CPU code
-
-#+BEGIN_NOTES
-#+END_NOTES
-
-* Netty, Agrona
-
-https://github.com/netty/netty/blob/4.1/common/src/main/java/io/netty/util/HashedWheelTimer.java
-https://github.com/real-logic/Agrona/blob/master/agrona/src/main/java/org/agrona/TimerWheel.java
-
-* Hierarchical Timing Wheels
-
-illustration here
-
-#+BEGIN_NOTES
-Indeed, if we want more dynamic range -- log-linear buckets / HDR
-histogram, this takes us to hierarchical timing wheels.
-
-In Linux's timing wheel, we also get an appearance by another favorite
-practical data structures: bitmaps and compressed bitmaps.
-
-You might notice that the wheels here are split by 6 bits instead
-of 8.  Why?  2^6 is 64, so we can represent the occupancy of a wheel
-with a 64-bit bitmap.
-#+END_NOTES
-
-* Erlang
-
-
-
-* Linux
-
-- hrtimers (accurate, run-to-completion) and timeouts (sloppy, usually cancelled)
-
-prctl for thread-wide slack
-
-new one went in in 4.8
-https://lwn.net/Articles/646950/
-https://lwn.net/Articles/152436/
-
-http://elinux.org/Kernel_Timer_Systems
-
-
-~linux/kernel/time/timer.c~
-
-
-* Kafka
-
-http://www.confluent.io/blog/apache-kafka-purgatory-hierarchical-timing-wheels
-
-- formerly used ~java.util.concurrent.DelayQueue~, which is built on a
-  binary heap
-
-* timeout.c
-
-http://25thandclement.com/~william/projects/timeout.c.html
-
-* Ratas
-
-#+BEGIN_NOTES
-Serendipitously with a reactivated interest I had in timing wheels,
-Adrian Colyer's Morning Paper featured Lauck and Varghese's paper, and
-Juho Snellman posted about Ratas, a timing wheel implementation he had
-designed.
-
-Juho's blog post about the design of Ratas is a great read, and covers
-much of what I've tried to get across in this talk.
-
-Snellman makes the argument that we don't need to care about tricks
-like bitmaps for finding the next timer, because this will only occur
-when the wheel has low occupancy, which he conjectures will be when
-the system is under low load and can deal with the extra work of
-scanning for the next tick.
-
-I'm not sure if he's right, but it's a compelling idea, especially
-since a linear scan of a small array is pretty much the best case in
-terms of cache use and prefetching.
-#+END_NOTES
-
-* Other techniques
-
- - calendar queues
- - skip lists
- - softheaps?
-
-#+BEGIN_NOTES
-Related, there's been a lot of activity in discrete event simulation
-around priority queues usually called calendar queues.
-#+END_NOTES
 
 * Calendar Queues
 
@@ -825,7 +1021,7 @@ http://stackoverflow.com/questions/6004978/what-is-a-calendar-queue
 #+BEGIN_NOTES
 - widely studied in Discrete Event Simulation
 - many variants
-- cron uses Franta-Maly
+- cron uses Franta-Maly; but not vixie cron, that just wakes every minute
 
 http://stackoverflow.com/questions/6004978/what-is-a-calendar-queue
 #+END_NOTES
