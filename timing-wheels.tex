@@ -1,0 +1,102 @@
+\documentclass{beamer}
+\usepackage[utf8]{inputenc}
+\usepackage[english]{babel}
+\usepackage{hyperref}
+\usepackage{minted}
+%%\usemintedstyle{perldoc}
+\usetheme{default}
+\beamertemplatenavigationsymbolsempty{}
+
+\title{Implementations of Timing Wheels}
+\author{Julian Squires}
+\institute{AdGear Technologies, Inc.}
+\date{March 16, 2017}
+\begin{document}
+
+\begin{frame}
+  \titlepage{}
+\end{frame}
+
+\begin{frame}
+  Varghese and Lauck. ``Hashed and hierarchical timing
+wheels: Data structures for the efficient implementation of a timer
+facility.'' ACM SIGOPS Operating Systems Review 21.5 (1987): 25--38.
+
+\vspace{1.5em}
+
+Varghese and Lauck. ``Hashed and hierarchical timing wheels: efficient
+data structures for implementing a timer facility.''  IEEE/ACM
+transactions on networking 5.6 (1997): 824--834.
+
+\vspace{1.5em}
+
+Varghese. Network Algorithmics: An Interdisciplinary Approach
+To Designing Fast Networked Devices. Morgan Kaufmann, 2004.
+\end{frame}
+
+\begin{frame}{Recent activity}
+  \begin{itemize}
+  \item LWN on Gleixner's timing wheels patch:
+    \hspace{1em}\hyperlink{https://lwn.net/Articles/646950/}{https://lwn.net/Articles/646950/}
+
+  \item Adrian Colyer's Morning Paper blog:
+    \hspace{1em}\hyperlink{https://blog.acolyer.org/2015/11/23/hashed-and-hierarchical-timing-wheels/}{https://blog.acolyer.org/2015/11/23/hashed-and-hierarchical-timing-wheels/}
+
+  \item Juho Snellman on Ratas:
+    \hspace{1em}\hyperlink{https://www.snellman.net/blog/archive/2016-07-27-ratas-hierarchical-timer-wheel/}{https://www.snellman.net/blog/archive/2016-07-27-ratas-hierarchical-timer-wheel/}
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Motivation}
+  \begin{columns}
+    \column{0.5\textwidth}\centering
+    Optimistic\\[.2cm]
+    \begin{itemize}
+      \item simulations
+      \item scheduling
+      \item flow control
+      \item circuit breakers
+      \item watchdogs
+    \end{itemize}
+    \column{0.5\textwidth}\centering
+    Pessimistic\\[.2cm]
+    \begin{itemize}
+    \item best-effort requests
+    \item TCP retransmit timers
+    \item IO timeouts
+    \end{itemize}
+  \end{columns}
+\end{frame}
+
+\begin{frame}{Guarantees of a timer system}
+  A timer scheduled to fire after $t$ ticks will have its action
+  executed, some time after $t$ ticks (if your clock is monotonic and
+  doesn't jump forward or skew forward and \ldots)
+\end{frame}
+
+\begin{frame}[t,fragile]
+  \frametitle{Zephyr: schedule (\texttt{kernel/include/timeout\_q.h})}
+
+\begin{minted}{c}
+static inline void _add_timeout([...])
+{
+    [...]
+    SYS_DLIST_FOR_EACH_NODE(&_timeout_q, node) {
+        struct _timeout *in_q = (struct _timeout *)node;
+
+        if (*delta <= in_q->delta_ticks_from_prev) {
+            in_q->delta_ticks_from_prev -= *delta;
+            sys_dlist_insert_before(&_timeout_q, node,
+                                    &timeout->node);
+            goto inserted;
+        }
+
+        *delta -= in_q->delta_ticks_from_prev;
+    }
+    sys_dlist_append(&_timeout_q, &timeout->node);
+    [...]
+}
+\end{minted}
+\end{frame}
+
+\end{document}
