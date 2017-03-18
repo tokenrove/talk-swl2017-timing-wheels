@@ -22,10 +22,12 @@
 
 \begin{frame}{Disclaimers}
   \begin{itemize}
-  \item performance claims without benchmarks are damned lies;
+  \item Performance claims without benchmarks are damned lies;
   \item I don't understand all these systems;
   \item I'm handwaving on many complex issues, especially concurrency
-    and multiprocessor issues.
+    and multiprocessor issues;
+  \item 20 minutes is not enough time;
+  \item Time is the enemy.
   \end{itemize}
 \end{frame}
 
@@ -245,8 +247,11 @@ To Designing Fast Networked Devices. Morgan Kaufmann, 2004.
     \end{itemize}
   \end{itemize}
 
-  \vspace{2em}
-  Costello and Varghese. ``Redesigning the BSD callout and timer facilities.'' (1995).
+  \vspace{1.5em} Costello and Varghese. ``Redesigning the BSD callout
+  and timer facilities.'' (1995).
+
+  \vspace{1em} Italiano and Motin. ``Calloutng: a new infrastructure
+  for timer facilities in the FreeBSD kernel.'' (2013).
 \end{frame}
 
 
@@ -289,8 +294,11 @@ can conspire to make logarthmic time not nearly good enough.
 \end{frame}
 
 \begin{frame}
-  \includegraphics[width=\textwidth]{logo_adgear_smaller.png}
-  \\
+  \begin{center}
+    \includegraphics[width=0.5\textwidth]{logo_adgear_smaller.png}
+  \end{center}
+
+  \vspace{3em}
   \begin{center}
     Julian Squires \\
     \hyperlink{mailto:julian@cipht.net}{$<$julian@cipht.net$>$}
